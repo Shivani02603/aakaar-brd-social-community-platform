@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: social_platform_postgres
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/migrate.sql:/docker-entrypoint-initdb.d/02-migrate.sql
+      - ./database/seed.js:/docker-entrypoint-initdb.d/03-seed.js
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: appdb
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U appuser -d appdb']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: social_platform_backend
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://appuser:secret@postgres:5432/appdb
+      JWT_SECRET: changeme_in_production_use_strong_secret
+      PORT: 3001
+      LOG_LEVEL: info
+    volumes:
+      - ./backend:/app/backend
+      - ./database:/app/database
+      - /app/backend/node_modules
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3001/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: social_platform_frontend
+    ports:
+      - '80:80'
+      - '3000:3000'
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:3001
+      VITE_APP_NAME: Social Platform
+      NODE_ENV: development
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:80']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:
+    name: social_platform_postgres_data
